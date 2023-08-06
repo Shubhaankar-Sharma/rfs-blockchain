@@ -56,7 +56,7 @@ func (b *Block) IsGenesisBlock() bool {
 
 func (b *Block) GenerateHash() string {
 	hash := md5.New()
-	hash.Write([]byte(fmt.Sprintf("%v%v%v", b.Creator, b.PrevHash, b.Nonce)))
+	hash.Write([]byte(fmt.Sprintf("%v%v", b.PrevHash, b.Nonce)))
 	return hex.EncodeToString(hash.Sum(nil))
 }
 

@@ -1,7 +1,6 @@
 package blockchain
 
 import (
-	"math"
 	"sync"
 	"time"
 )
@@ -14,7 +13,7 @@ const (
 	NumCoinsPerFileCreate  uint8         = 5
 	GenOpBlockTimeout      time.Duration = time.Second * 10
 	GenesisBlockHash       string        = "c6c534e825f4a3d41ede3e67473187d1"
-	Difficulty             uint64        = math.MaxUint64
+	Difficulty             uint64        = 150
 )
 
 type RFSStore struct {

@@ -6,16 +6,7 @@ import (
 	"time"
 )
 
-type OperationType uint
-
 type Address string
-
-const (
-	UNKOWN_OPERATION OperationType = iota
-	CREATE_FILE
-	APPEND_RECORD
-	DELETE_FILE
-)
 
 const (
 	MinedCoinsPerOpBlock   uint8         = 10
@@ -48,20 +39,4 @@ type File struct {
 	Fname string `json:"fname"`
 	// max number of records is 65535
 	Records []Record `json:"records"`
-}
-
-type OperationMsg struct {
-	OpType OperationType `json:"op_type"`
-	OpFrom Address       `json:"op_from"`
-	// encoded operation
-	Op []byte `json:"op"`
-}
-
-type CreateFileOp struct {
-	Fname string `json:"fname"`
-}
-
-type AppendRecordOp struct {
-	Fname  string `json:"fname"`
-	Record Record `json:"record"`
 }

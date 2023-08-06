@@ -15,7 +15,7 @@ type Account struct {
 	PrivateKey *ecdsa.PrivateKey
 	PublicKey  [64]byte
 	Address    string
-	rwMutex    *sync.RWMutex
+	rwMutex    sync.RWMutex
 	Nonce      uint64
 }
 
@@ -65,7 +65,7 @@ func AccountFromAddress(address string, nonce uint64) (*Account, error) {
 func (a *Account) IncrementNonce() {
 	a.rwMutex.Lock()
 	defer a.rwMutex.Unlock()
-	a.Nonce++
+	a.Nonce += 1
 }
 
 func (a *Account) GetNonce() uint64 {
@@ -75,8 +75,8 @@ func (a *Account) GetNonce() uint64 {
 }
 
 func (a *Account) Sign(msg []byte) (hash []byte, sig []byte, err error) {
-	nonceBytes := make([]byte, 8)
-	binary.LittleEndian.PutUint64(nonceBytes, a.GetNonce())
+	nonceBytes := make([]byte, binary.MaxVarintLen64)
+	binary.PutUvarint(nonceBytes, a.GetNonce())
 	hash = append(nonceBytes, []byte("SignedMessage:")...)
 	hash = append(hash, msg...)
 	sig, err = ecdsa.SignASN1(rand.Reader, a.PrivateKey, hash)
@@ -84,9 +84,9 @@ func (a *Account) Sign(msg []byte) (hash []byte, sig []byte, err error) {
 }
 
 func (a *Account) Verify(hash []byte, sig []byte, correctNonce uint64) bool {
-	nonceBytes := hash[:8]
+	nonceBytes := hash[:binary.MaxVarintLen64]
 	// bytes to uint64
-	nonce := binary.LittleEndian.Uint64(nonceBytes)
+	nonce, _ := binary.Uvarint(nonceBytes)
 	if nonce != correctNonce {
 		return false
 	}

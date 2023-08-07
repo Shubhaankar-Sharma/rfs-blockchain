@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Shubhaankar-Sharma/rfs-blockchain/crypto"
 )
 
-type MINING_STATE int
+type MINING_STATE int32
 
 const (
 	IDLE MINING_STATE = iota
@@ -31,15 +32,19 @@ type BlockChain struct {
 	ledger           LedgerStore     `json:"ledger"`
 	operationMemPool []OperationMsg  `json:"operation_mem_pool"`
 	miningState      struct {
-		state         MINING_STATE
-		timeStartChan chan struct{}
-		timeOutChan   chan struct{}
-		abandonMining chan struct{}
+		state                     *int32
+		timeStartChan             chan struct{}
+		timeOutChan               chan struct{}
+		abandonMining             chan struct{}
+		startOpMiningTimerRunning atomic.Int32
 	}
 }
 
 func NewBlockchain() *BlockChain {
 	wallet := crypto.NewAccount()
+	startOpMiningTimerRunning := atomic.Int32{}
+	startOpMiningTimerRunning.Store(0)
+	miningState := int32(IDLE)
 	return &BlockChain{
 		CurrentHeight:    0,
 		blocks:           []Block{},
@@ -48,15 +53,17 @@ func NewBlockchain() *BlockChain {
 		operationMemPool: []OperationMsg{},
 		Wallet:           wallet,
 		miningState: struct {
-			state         MINING_STATE
-			timeStartChan chan struct{}
-			timeOutChan   chan struct{}
-			abandonMining chan struct{}
+			state                     *int32
+			timeStartChan             chan struct{}
+			timeOutChan               chan struct{}
+			abandonMining             chan struct{}
+			startOpMiningTimerRunning atomic.Int32
 		}{
-			state:         IDLE,
-			timeStartChan: make(chan struct{}),
-			timeOutChan:   make(chan struct{}),
-			abandonMining: make(chan struct{}),
+			state:                     &miningState,
+			timeStartChan:             make(chan struct{}, 256),
+			timeOutChan:               make(chan struct{}, 256),
+			abandonMining:             make(chan struct{}, 256),
+			startOpMiningTimerRunning: startOpMiningTimerRunning,
 		},
 	}
 }
@@ -92,9 +99,6 @@ func (bc *BlockChain) runMiner() {
 	noOpCtx, noOpCancel = context.WithCancel(context.Background())
 	opCtx, opCancel = context.WithCancel(context.Background())
 
-	noOpSig := make(chan struct{}, 1)
-	// start mining
-	noOpSig <- struct{}{}
 	go func() {
 		for {
 			select {
@@ -138,12 +142,14 @@ func (bc *BlockChain) runMiner() {
 				}
 			}(opCtx)
 			wg.Wait()
-		case <-noOpSig:
+		default:
 			noOpCtx, noOpCancel = context.WithCancel(context.Background())
+			if len(bc.operationMemPool) > 0 {
+				continue
+			}
 			func() {
 				// mine no-op block
 				noOpBlock := bc.InitNoOpBlock()
-				defer func() { noOpSig <- struct{}{} }()
 				defer bc.setState(IDLE)
 				bc.setState(NO_OPERATION_MINING)
 				noOpBlock, err := MineBlock(noOpBlock, Difficulty, noOpCtx.Done())
@@ -239,22 +245,40 @@ func (bc *BlockChain) AddOperation(op OperationMsg) {
 
 // TODO: USE ATOMIC
 func (bc *BlockChain) setState(state MINING_STATE) {
-	bc.rwMutex.Lock()
-	defer bc.rwMutex.Unlock()
-	bc.miningState.state = state
+	atomic.StoreInt32(bc.miningState.state, int32(state))
 	fmt.Println("state changed to: ", state.String())
 }
 
 func (bc *BlockChain) readState() MINING_STATE {
-	bc.rwMutex.RLock()
-	defer bc.rwMutex.RUnlock()
-	return bc.miningState.state
+	state := atomic.LoadInt32(bc.miningState.state)
+	return MINING_STATE(state)
 }
 
 func (bc *BlockChain) startOpMiningTimer() {
+	if bc.miningState.startOpMiningTimerRunning.Load() == 1 {
+		return
+	}
+
+	bc.miningState.startOpMiningTimerRunning.Store(1)
 	go func() {
 		bc.miningState.timeStartChan <- struct{}{}
+		fmt.Println("starting timer")
+		if bc.readState() == NO_OPERATION_MINING {
+			bc.miningState.abandonMining <- struct{}{}
+		}
+		// wait for state to change
+		bc.waitTillStateChange(WAITING_FOR_OPERATION)
+		bc.miningState.startOpMiningTimerRunning.Store(0)
 		<-time.After(GenOpBlockTimeout)
 		bc.miningState.timeOutChan <- struct{}{}
 	}()
+}
+
+func (bc *BlockChain) waitTillStateChange(state MINING_STATE) {
+	for {
+		if bc.readState() == state {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

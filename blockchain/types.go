@@ -14,7 +14,7 @@ const (
 	GenOpBlockTimeout      time.Duration = time.Second * 10
 	GenesisBlockHash       string        = "c6c534e825f4a3d41ede3e67473187d1"
 	// ideal difficulty for a public blockchain would be 150 or above
-	Difficulty uint64 = 12
+	Difficulty uint64 = 150
 )
 
 type RFSStore struct {
@@ -23,8 +23,8 @@ type RFSStore struct {
 }
 
 type LedgerStore struct {
-	rwMutex sync.RWMutex               `json:"-"`
-	Ledger  map[Address]AccountStorage `json:"ledger"`
+	rwMutex sync.RWMutex                `json:"-"`
+	Ledger  map[Address]*AccountStorage `json:"ledger"`
 }
 
 type AccountStorage struct {

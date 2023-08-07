@@ -6,6 +6,10 @@ import (
 	"math/big"
 )
 
+var (
+	ErrCanceled = errors.New("block mining canceled")
+)
+
 type Proof struct {
 	block  Block    `json:"block"`
 	target *big.Int `json:"difficulty"`
@@ -31,10 +35,15 @@ func (p *Proof) ValidateProof() bool {
 	return hashInt.Cmp(p.target) == -1
 }
 
-func (p *Proof) MineBlock() (Block, error) {
+func (p *Proof) MineBlock(cancelSig <-chan struct{}) (Block, error) {
 	nonce := uint64(0)
 
 	for nonce < math.MaxUint64 {
+		select {
+		case <-cancelSig:
+			return Block{}, ErrCanceled
+		default:
+		}
 
 		p.block.SetNonce(nonce)
 		p.block.SetHash(p.block.GenerateHash())

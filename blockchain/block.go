@@ -42,7 +42,6 @@ func (b *Block) ValidateBlock(currHeight uint64, lastHash string) bool {
 
 	proof := NewProof(*b, Difficulty)
 	return proof.ValidateProof()
-
 }
 
 func (b *Block) IsGenesisBlock() bool {
@@ -68,9 +67,9 @@ func (b *Block) SetHash(hash string) {
 	b.Hash = hash
 }
 
-func MineBlock(block Block, difficulty uint64) (Block, error) {
+func MineBlock(block Block, difficulty uint64, cancelSig <-chan struct{}) (Block, error) {
 	proof := NewProof(block, difficulty)
-	block, err := proof.MineBlock()
+	block, err := proof.MineBlock(cancelSig)
 	if err != nil {
 		return Block{}, err
 	}

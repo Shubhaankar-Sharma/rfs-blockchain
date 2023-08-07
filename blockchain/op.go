@@ -1,5 +1,7 @@
 package blockchain
 
+import "github.com/Shubhaankar-Sharma/rfs-blockchain/crypto"
+
 type OperationType uint
 
 const (
@@ -29,18 +31,41 @@ type AppendRecordOp struct {
 	Record Record `json:"record"`
 }
 
-func ValidateOperation(op OperationMsg) bool {
+func ValidateOperation(op OperationMsg, address Address, accountStorage *AccountStorage) (bool, error) {
 	// check if op is valid
-	switch op.OpType {
-	case CREATE_FILE:
-		return true
-	case APPEND_RECORD:
-		return true
-	case DELETE_FILE:
-		return true
-	default:
-		return false
+	account, err := crypto.AccountFromAddress(string(address), accountStorage.Nonce)
+	if err != nil {
+		return false, nil
 	}
 
-	// account := GetAccount(op.OpFrom)
+	switch op.OpType {
+	case CREATE_FILE:
+		// check balance
+		if accountStorage.Balance < uint64(NumCoinsPerFileCreate) {
+			return false, ErrInsufficientFunds
+		}
+	case APPEND_RECORD:
+		if accountStorage.Balance < uint64(NumCoinsPerFileAppend) {
+			return false, ErrInsufficientFunds
+		}
+	case DELETE_FILE:
+		// check balance
+		if accountStorage.Balance < uint64(NumCoinsPerFileDelete) {
+			return false, ErrInsufficientFunds
+		}
+	default:
+		return false, nil
+	}
+
+	if op.OpFrom == "" {
+		return false, nil
+	}
+
+	if op.OpFrom != address {
+		return false, nil
+	}
+
+	// TODO: think about more stuff to validate, aka rfs operations
+
+	return account.Verify(op.Signature.Hash, op.Signature.Sig), nil
 }

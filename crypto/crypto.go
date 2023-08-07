@@ -83,11 +83,11 @@ func (a *Account) Sign(msg []byte) (hash []byte, sig []byte, err error) {
 	return hash, sig, err
 }
 
-func (a *Account) Verify(hash []byte, sig []byte, correctNonce uint64) bool {
+func (a *Account) Verify(hash []byte, sig []byte) bool {
 	nonceBytes := hash[:binary.MaxVarintLen64]
 	// bytes to uint64
 	nonce, _ := binary.Uvarint(nonceBytes)
-	if nonce != correctNonce {
+	if nonce != a.GetNonce() {
 		return false
 	}
 

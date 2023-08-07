@@ -28,8 +28,8 @@ type BlockChain struct {
 	CurrentHeight    uint64          `json:"current_height"`
 	rwMutex          sync.RWMutex    `json:"rw_mutex"`
 	blocks           []Block         `json:"blocks"`
-	fileStore        RFSStore        `json:"file_store"`
-	ledger           LedgerStore     `json:"ledger"`
+	fileStore        *RFSStore       `json:"file_store"`
+	ledger           *LedgerStore    `json:"ledger"`
 	operationMemPool []OperationMsg  `json:"operation_mem_pool"`
 	miningState      struct {
 		state                     *int32
@@ -48,8 +48,8 @@ func NewBlockchain() *BlockChain {
 	return &BlockChain{
 		CurrentHeight:    0,
 		blocks:           []Block{},
-		fileStore:        RFSStore{Files: map[string]File{}},
-		ledger:           LedgerStore{Ledger: map[Address]*AccountStorage{}},
+		fileStore:        &RFSStore{Files: map[string]File{}},
+		ledger:           &LedgerStore{Ledger: map[Address]*AccountStorage{}},
 		operationMemPool: []OperationMsg{},
 		Wallet:           wallet,
 		miningState: struct {
@@ -199,18 +199,35 @@ func (bc *BlockChain) AddBlock(block Block) {
 		return
 	}
 
-	if block.ValidateBlock(bc.CurrentHeight, bc.blocks[bc.CurrentHeight-1].Hash) {
+	if block.ValidateBlock(bc.CurrentHeight, bc.blocks[bc.CurrentHeight-1].Hash) && bc.validateOperations(block) {
 		bc.blocks = append(bc.blocks, block)
 		bc.CurrentHeight++
 		bc.rwMutex.Unlock()
 		bc.processBlockLedgerAndOperations(block)
+	} else {
+		fmt.Println("invalid block")
+		bc.rwMutex.Unlock()
 	}
+}
+
+func (bc *BlockChain) validateOperations(block Block) bool {
+	// validate transactions
+	for _, op := range block.Operations {
+		if v, _ := ValidateOperation(op, op.OpFrom, bc.ledger.GetAccount(op.OpFrom)); !v {
+			return false
+		}
+	}
+	return true
 }
 
 func (bc *BlockChain) processBlockLedgerAndOperations(block Block) {
 	bc.rwMutex.Lock()
 	defer bc.rwMutex.Unlock()
 	// process ledger
+	for _, op := range block.Operations {
+		bc.ledger.ApplyOperation(op)
+	}
+
 	// give reward
 	reward := uint64(MinedCoinsPerNoOpBlock)
 	if len(block.Operations) > 0 {
@@ -229,18 +246,40 @@ func (bc *BlockChain) processBlockLedgerAndOperations(block Block) {
 	// process operations
 }
 
-func (bc *BlockChain) AddOperation(op OperationMsg) {
+// WARNING! THIS IS EXTERNAL ONLY FUNCTION, IT IS NOT AN INTERNAL FUNCTION
+func (bc *BlockChain) AddOperation(op OperationMsg) error {
 	// validate operation
-	if ValidateOperation(op) {
+	var err error
+	var v bool
+	if v, err = ValidateOperation(op, op.OpFrom, bc.ledger.GetAccount(op.OpFrom)); v {
 		bc.rwMutex.Lock()
 		bc.operationMemPool = append(bc.operationMemPool, op)
 		bc.rwMutex.Unlock()
 
 		if bc.readState() == WAITING_FOR_OPERATION {
-			return
+			return nil
 		}
 		bc.startOpMiningTimer()
+	} else {
+		return err
 	}
+	return nil
+}
+
+func (bc *BlockChain) SignTransaction(op OperationMsg) (OperationMsg, error) {
+	op.OpFrom = Address(bc.Wallet.Address)
+	hash, sig, err := bc.Wallet.Sign(op.Op)
+	if err != nil {
+		return OperationMsg{}, err
+	}
+	op.Signature = struct {
+		Hash []byte "json:\"hash\""
+		Sig  []byte "json:\"sig\""
+	}{
+		Hash: hash,
+		Sig:  sig,
+	}
+	return op, nil
 }
 
 // TODO: USE ATOMIC

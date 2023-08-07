@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -18,10 +19,21 @@ func main() {
 	time.Sleep(time.Second * 2)
 	// add 12 operations to mempool
 	for i := 0; i < 12; i++ {
-		bc.AddOperation(blockchain.OperationMsg{
+		op, err := bc.SignTransaction(blockchain.OperationMsg{
 			OpType: blockchain.CREATE_FILE,
 		})
+		if err != nil {
+			panic(err)
+		}
+	tryAgain:
+		err = bc.AddOperation(op)
+		if err != nil && err == blockchain.ErrInsufficientFunds {
+			fmt.Println("waiting for funds")
+			time.Sleep(time.Second * 5)
+			goto tryAgain
+		}
+
 		time.Sleep(time.Second * 1)
 	}
-	wg.Wait()
+	fmt.Println("done")
 }

@@ -38,8 +38,6 @@ func (b *Block) ValidateBlock(currHeight uint64, lastHash string) bool {
 		return false
 	}
 
-	// Validate Operations
-
 	proof := NewProof(*b, Difficulty)
 	return proof.ValidateProof()
 }

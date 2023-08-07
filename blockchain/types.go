@@ -11,6 +11,8 @@ const (
 	MinedCoinsPerOpBlock   uint8         = 10
 	MinedCoinsPerNoOpBlock uint8         = 5
 	NumCoinsPerFileCreate  uint8         = 5
+	NumCoinsPerFileAppend  uint8         = 5
+	NumCoinsPerFileDelete  uint8         = 5
 	GenOpBlockTimeout      time.Duration = time.Second * 10
 	GenesisBlockHash       string        = "c6c534e825f4a3d41ede3e67473187d1"
 	// ideal difficulty for a public blockchain would be 150 or above
@@ -20,11 +22,6 @@ const (
 type RFSStore struct {
 	rwMutex sync.RWMutex    `json:"-"`
 	Files   map[string]File `json:"files"`
-}
-
-type LedgerStore struct {
-	rwMutex sync.RWMutex                `json:"-"`
-	Ledger  map[Address]*AccountStorage `json:"ledger"`
 }
 
 type AccountStorage struct {

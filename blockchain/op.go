@@ -1,6 +1,11 @@
 package blockchain
 
-import "github.com/Shubhaankar-Sharma/rfs-blockchain/crypto"
+import (
+	"crypto/md5"
+	"encoding/hex"
+
+	"github.com/Shubhaankar-Sharma/rfs-blockchain/crypto"
+)
 
 type OperationType uint
 
@@ -19,7 +24,8 @@ type OperationMsg struct {
 		Sig  []byte `json:"sig"`
 	} `json:"sig"`
 	// encoded operation
-	Op []byte `json:"op"`
+	Op   []byte `json:"op"`
+	Hash string `json:"hash"`
 }
 
 type CreateFileOp struct {
@@ -33,7 +39,7 @@ type AppendRecordOp struct {
 
 func ValidateOperation(op OperationMsg, address Address, accountStorage *AccountStorage) (bool, error) {
 	// check if op is valid
-	account, err := crypto.AccountFromAddress(string(address), accountStorage.Nonce)
+	account, err := crypto.AccountFromAddress(string(address))
 	if err != nil {
 		return false, nil
 	}
@@ -41,16 +47,16 @@ func ValidateOperation(op OperationMsg, address Address, accountStorage *Account
 	switch op.OpType {
 	case CREATE_FILE:
 		// check balance
-		if accountStorage.Balance < uint64(NumCoinsPerFileCreate) {
+		if accountStorage.GetBalance() < uint64(NumCoinsPerFileCreate) {
 			return false, ErrInsufficientFunds
 		}
 	case APPEND_RECORD:
-		if accountStorage.Balance < uint64(NumCoinsPerFileAppend) {
+		if accountStorage.GetBalance() < uint64(NumCoinsPerFileAppend) {
 			return false, ErrInsufficientFunds
 		}
 	case DELETE_FILE:
 		// check balance
-		if accountStorage.Balance < uint64(NumCoinsPerFileDelete) {
+		if accountStorage.GetBalance() < uint64(NumCoinsPerFileDelete) {
 			return false, ErrInsufficientFunds
 		}
 	default:
@@ -67,5 +73,11 @@ func ValidateOperation(op OperationMsg, address Address, accountStorage *Account
 
 	// TODO: think about more stuff to validate, aka rfs operations
 
-	return account.Verify(op.Signature.Hash, op.Signature.Sig), nil
+	return account.Verify(op.Signature.Hash, op.Signature.Sig)
+}
+
+func (op *OperationMsg) GenerateHash() {
+	hash := md5.New()
+	hash.Write(append(op.Op, op.Signature.Hash...))
+	op.Hash = hex.EncodeToString(hash.Sum(nil))
 }

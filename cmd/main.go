@@ -10,30 +10,49 @@ import (
 
 func main() {
 	bc := blockchain.NewBlockchain()
+	bc.Run()
+	time.Sleep(time.Second * 2)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		bc.Run()
-	}()
-	time.Sleep(time.Second * 2)
 	// add 12 operations to mempool
+	optypes := []blockchain.OperationType{
+		blockchain.CREATE_FILE,
+		blockchain.APPEND_RECORD,
+		blockchain.DELETE_FILE,
+		blockchain.CREATE_FILE,
+		blockchain.APPEND_RECORD,
+		blockchain.DELETE_FILE,
+		blockchain.CREATE_FILE,
+		blockchain.APPEND_RECORD,
+		blockchain.DELETE_FILE,
+		blockchain.CREATE_FILE,
+		blockchain.APPEND_RECORD,
+		blockchain.DELETE_FILE,
+	}
+
 	for i := 0; i < 12; i++ {
 		op, err := bc.SignTransaction(blockchain.OperationMsg{
-			OpType: blockchain.CREATE_FILE,
+			OpType: optypes[i],
 		})
+		op.GenerateHash()
 		if err != nil {
 			panic(err)
 		}
 	tryAgain:
 		err = bc.AddOperation(op)
-		if err != nil && err == blockchain.ErrInsufficientFunds {
-			fmt.Println("waiting for funds")
-			time.Sleep(time.Second * 5)
+
+		if err != nil {
+			fmt.Println("waiting for funds, ERROR: ", err.Error(), "id: ", i)
+			time.Sleep(time.Second * 1)
 			goto tryAgain
 		}
 
+		fmt.Println("added operation to mempool: ", i)
 		time.Sleep(time.Second * 1)
 	}
-	fmt.Println("done")
+	// fmt.Println("done")
+	// time.Sleep(time.Second * 10)
+	// bc.Stop()
+	wg.Wait()
+
 }

@@ -7,15 +7,15 @@ import (
 )
 
 type Block struct {
-	Creator    Address        `json:"creator"`
-	Height     uint64         `json:"height"`
-	Hash       string         `json:"hash"`
-	Nonce      uint64         `json:"nonce"`
-	PrevHash   string         `json:"prev_hash"`
-	Operations []OperationMsg `json:"operations"`
+	Creator    Address                 `json:"creator"`
+	Height     uint64                  `json:"height"`
+	Hash       string                  `json:"hash"`
+	Nonce      uint64                  `json:"nonce"`
+	PrevHash   string                  `json:"prev_hash"`
+	Operations map[string]OperationMsg `json:"operations"`
 }
 
-func NewBlock(creator Address, height uint64, prevHash string, operations []OperationMsg) Block {
+func NewBlock(creator Address, height uint64, prevHash string, operations map[string]OperationMsg) Block {
 	return Block{
 		Creator:    creator,
 		Height:     height,
@@ -83,7 +83,7 @@ func GenerateGenesisBlock() Block {
 		Hash:       GenesisBlockHash,
 		Nonce:      0,
 		PrevHash:   "0",
-		Operations: []OperationMsg{},
+		Operations: map[string]OperationMsg{},
 	}
 
 }

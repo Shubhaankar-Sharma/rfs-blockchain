@@ -24,12 +24,6 @@ type RFSStore struct {
 	Files   map[string]File `json:"files"`
 }
 
-type AccountStorage struct {
-	rwMutex sync.RWMutex `json:"-"`
-	Balance uint64       `json:"balance"`
-	Nonce   uint64       `json:"nonce"`
-}
-
 type Record [512]byte
 
 type File struct {

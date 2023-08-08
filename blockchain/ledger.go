@@ -5,10 +5,6 @@ import (
 	"sync"
 )
 
-var (
-	ErrInsufficientFunds = errors.New("insufficient funds")
-)
-
 type LedgerStore struct {
 	rwMutex sync.RWMutex                `json:"-"`
 	Ledger  map[Address]*AccountStorage `json:"ledger"`
@@ -49,7 +45,7 @@ func (ls *LedgerStore) AddBalance(address Address, amount uint64) {
 		ls.Ledger[address] = BlankAccount()
 	}
 
-	ls.Ledger[address].Balance += amount
+	ls.Ledger[address].AddBalance(amount)
 }
 
 func (ls *LedgerStore) SubtractBalance(address Address, amount uint64) error {
@@ -60,22 +56,12 @@ func (ls *LedgerStore) SubtractBalance(address Address, amount uint64) error {
 		return ErrInsufficientFunds
 	}
 
-	if ls.Ledger[address].Balance < amount {
+	if ls.Ledger[address].GetBalance() < amount {
 		return ErrInsufficientFunds
 	}
 
-	ls.Ledger[address].Balance -= amount
+	ls.Ledger[address].SubtractBalance(amount)
 	return nil
-}
-
-func (ls *LedgerStore) IncrementNonce(address Address) {
-	ls.rwMutex.Lock()
-	defer ls.rwMutex.Unlock()
-	if ls.Ledger[address] == nil {
-		ls.Ledger[address] = BlankAccount()
-	}
-
-	ls.Ledger[address].Nonce += 1
 }
 
 func (ls *LedgerStore) NewTransaction() *Transaction {
@@ -86,16 +72,22 @@ func (ls *LedgerStore) NewTransaction() *Transaction {
 }
 
 func (ls *LedgerStore) ApplyOperation(op OperationMsg) error {
+	var err error
 	switch op.OpType {
 	case CREATE_FILE:
-		ls.SubtractBalance(op.OpFrom, uint64(NumCoinsPerFileCreate))
+		err = ls.SubtractBalance(op.OpFrom, uint64(NumCoinsPerFileCreate))
 	case APPEND_RECORD:
-		ls.SubtractBalance(op.OpFrom, uint64(NumCoinsPerFileAppend))
+		err = ls.SubtractBalance(op.OpFrom, uint64(NumCoinsPerFileAppend))
 	case DELETE_FILE:
-		ls.SubtractBalance(op.OpFrom, uint64(NumCoinsPerFileDelete))
+		err = ls.SubtractBalance(op.OpFrom, uint64(NumCoinsPerFileDelete))
+	default:
+		err = errors.New("invalid operation type")
 	}
 
-	ls.IncrementNonce(op.OpFrom)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -103,10 +95,7 @@ func (ls *LedgerStore) copy() *LedgerStore {
 	l := NewLedgerStore()
 	ls.rwMutex.RLock()
 	for k, v := range ls.Ledger {
-		l.Ledger[k] = &AccountStorage{
-			Balance: v.Balance,
-			Nonce:   v.Nonce,
-		}
+		l.Ledger[k] = v.NewCopy()
 	}
 	ls.rwMutex.RUnlock()
 	return l
@@ -118,11 +107,4 @@ func (tx *Transaction) Commit() {
 	defer tx.Original.rwMutex.Unlock()
 	defer tx.LedgerCopy.rwMutex.RUnlock()
 	tx.Original.Ledger = tx.LedgerCopy.Ledger
-}
-
-func BlankAccount() *AccountStorage {
-	return &AccountStorage{
-		Balance: 0,
-		Nonce:   0,
-	}
 }

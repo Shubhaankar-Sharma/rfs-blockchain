@@ -24,248 +24,256 @@ func (s MINING_STATE) String() string {
 }
 
 type BlockChain struct {
-	Wallet           *crypto.Account `json:"wallet"`
-	CurrentHeight    uint64          `json:"current_height"`
-	rwMutex          sync.RWMutex    `json:"rw_mutex"`
-	blocks           []Block         `json:"blocks"`
-	fileStore        *RFSStore       `json:"file_store"`
-	ledger           *LedgerStore    `json:"ledger"`
-	operationMemPool []OperationMsg  `json:"operation_mem_pool"`
-	miningState      struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	Running *int32 `json:"running"`
+
+	Wallet *crypto.Account `json:"wallet"`
+
+	rwMutex sync.RWMutex `json:"rw_mutex"`
+
+	blocks []Block `json:"blocks"`
+
+	fileStore        *RFSStore         `json:"file_store"`
+	ledger           *LedgerStore      `json:"ledger"`
+	operationMemPool *OperationMemPool `json:"operation_mem_pool"`
+
+	miningState struct {
 		state                     *int32
 		timeStartChan             chan struct{}
 		timeOutChan               chan struct{}
 		abandonMining             chan struct{}
-		startOpMiningTimerRunning atomic.Int32
+		startOpMiningTimerRunning *atomic.Int32
 	}
+
+	// chans
+	blockListener     <-chan Block
+	operationListener <-chan OperationMsg
+
+	blockPublisher     chan<- Block
+	operationPublisher chan<- OperationMsg
 }
 
 func NewBlockchain() *BlockChain {
+	ctx, cancel := context.WithCancel(context.Background())
 	wallet := crypto.NewAccount()
 	startOpMiningTimerRunning := atomic.Int32{}
 	startOpMiningTimerRunning.Store(0)
 	miningState := int32(IDLE)
+	running := int32(0)
+
+	ledger := NewLedgerStore()
+
 	return &BlockChain{
-		CurrentHeight:    0,
+		ctx:     ctx,
+		cancel:  cancel,
+		Running: &running,
+
 		blocks:           []Block{},
 		fileStore:        &RFSStore{Files: map[string]File{}},
-		ledger:           &LedgerStore{Ledger: map[Address]*AccountStorage{}},
-		operationMemPool: []OperationMsg{},
+		ledger:           ledger,
+		operationMemPool: NewOperationMemPool(ledger.copy()),
 		Wallet:           wallet,
 		miningState: struct {
 			state                     *int32
 			timeStartChan             chan struct{}
 			timeOutChan               chan struct{}
 			abandonMining             chan struct{}
-			startOpMiningTimerRunning atomic.Int32
+			startOpMiningTimerRunning *atomic.Int32
 		}{
 			state:                     &miningState,
 			timeStartChan:             make(chan struct{}, 256),
 			timeOutChan:               make(chan struct{}, 256),
 			abandonMining:             make(chan struct{}, 256),
-			startOpMiningTimerRunning: startOpMiningTimerRunning,
+			startOpMiningTimerRunning: &startOpMiningTimerRunning,
 		},
+
+		blockListener:      make(chan Block, 256),
+		operationListener:  make(chan OperationMsg, 256),
+		blockPublisher:     make(chan Block, 256),
+		operationPublisher: make(chan OperationMsg, 256),
 	}
 }
 
 // run blockchain
 func (bc *BlockChain) Run() {
+	if bc.IsRunning() {
+		return
+	}
+
+	// TODO: check if you have any peers, if you do try to get the blockchain from them, before running
+	// the miner etc
+	// how to sync?
+	// check with all peers you have
+	// get the peer with the best height
+	// then get blocks by height from them...
+	// get block 1, 2, 3, 4, 5, 6...
+	// for the poc we will get full blockchain at once
+	// later on we will use pagination to get 50 blocks at once while syncing...
+	// after sync is complete, we will start the miner
+	// and open our listeners for txns and blocks
+	// if we get a new block and its valid, we will add it to our blockchain and abandon our current blockmining
+	// if we get a new txn, we will add it to our mempool and start mining a new block
+
+	// TODO: if len nodes to connect to is 0 we generate genesis block
 	if len(bc.blocks) == 0 {
 		genesis := GenerateGenesisBlock()
-		bc.AddBlock(genesis)
+		bc.addBlock(genesis)
 	}
 
-	// run miner
-	// the miner will constantly be adding blocks to the blockchain
-	// if it gets a signal for an operation, it will start timer, and will not generate new jobs
-	// when timer ends, it will generate a new block with the operation
-
-	// run operation handler
-	// the operation handler will constantly be listening for new operations
-	// and will add to the mempool
-
-	// block listener will constantly be listening for new blocks
-	// and will add to the if the block is valid blockchain
-	bc.runMiner()
+	go bc.minerWorker()
+	atomic.StoreInt32(bc.Running, 1)
 }
 
-func (bc *BlockChain) runMiner() {
-	// how do we do this...
-	// lets have a
+func (bc *BlockChain) IsRunning() bool {
+	return atomic.LoadInt32(bc.Running) == 1
+}
 
-	var noOpCtx, opCtx context.Context
-	var noOpCancel, opCancel context.CancelFunc
-	// TODO: replace context.Backround with service level context
-	noOpCtx, noOpCancel = context.WithCancel(context.Background())
-	opCtx, opCancel = context.WithCancel(context.Background())
-
-	go func() {
-		for {
-			select {
-			case <-bc.miningState.abandonMining:
-				fmt.Println("abandoning mining")
-				noOpCancel()
-				opCancel()
-				return
-				// case <-ctx.Done()
-			}
-		}
-	}()
-
-	for {
-		fmt.Printf("Blockchain Current Height: %v \n", bc.CurrentHeight)
-		select {
-		case <-bc.miningState.timeStartChan:
-			opCtx, opCancel = context.WithCancel(context.Background())
-			wg := sync.WaitGroup{}
-			wg.Add(1)
-			go func(ctx context.Context) {
-				bc.setState(WAITING_FOR_OPERATION)
-				defer bc.setState(IDLE)
-				defer wg.Done()
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					// wait till timeout to mine
-					case <-bc.miningState.timeOutChan:
-						bc.setState(OPERATION_MINING)
-						opBlock := bc.InitOpBlock()
-						opBlock, err := MineBlock(opBlock, Difficulty, ctx.Done())
-						if err == nil {
-							bc.AddBlock(opBlock)
-						}
-						return
-						// mine with mempool
-					}
-
-				}
-			}(opCtx)
-			wg.Wait()
-		default:
-			noOpCtx, noOpCancel = context.WithCancel(context.Background())
-			if len(bc.operationMemPool) > 0 {
-				continue
-			}
-			func() {
-				// mine no-op block
-				noOpBlock := bc.InitNoOpBlock()
-				defer bc.setState(IDLE)
-				bc.setState(NO_OPERATION_MINING)
-				noOpBlock, err := MineBlock(noOpBlock, Difficulty, noOpCtx.Done())
-				if err != nil {
-					return
-				}
-				bc.AddBlock(noOpBlock)
-			}()
-		}
-	}
+func (bc *BlockChain) Stop() {
+	bc.cancel()
 }
 
 func (bc *BlockChain) InitNoOpBlock() Block {
 	bc.rwMutex.RLock()
 	defer bc.rwMutex.RUnlock()
 	block := Block{
-		Height:     bc.CurrentHeight + 1,
+		Height:     uint64(len(bc.blocks)) + 1,
 		Creator:    Address(bc.Wallet.Address),
-		PrevHash:   bc.blocks[bc.CurrentHeight-1].Hash,
-		Operations: []OperationMsg{},
+		PrevHash:   bc.blocks[(len(bc.blocks))-1].Hash,
+		Operations: map[string]OperationMsg{},
 	}
 	return block
 }
 
 func (bc *BlockChain) InitOpBlock() Block {
-	bc.rwMutex.Lock()
-	defer bc.rwMutex.Unlock()
-	operations := make([]OperationMsg, len(bc.operationMemPool))
-	copy(operations, bc.operationMemPool)
-	bc.operationMemPool = []OperationMsg{}
+	operations := bc.operationMemPool.EmptyMemPool()
+
+	height := bc.CurrentHeight()
+	bc.rwMutex.RLock()
+	prevHash := bc.blocks[height-1].Hash
+	bc.rwMutex.RUnlock()
 
 	block := Block{
-		Height:     bc.CurrentHeight + 1,
+		Height:     height + 1,
 		Creator:    Address(bc.Wallet.Address),
-		PrevHash:   bc.blocks[bc.CurrentHeight-1].Hash,
+		PrevHash:   prevHash,
 		Operations: operations,
 	}
+
 	return block
 }
 
-func (bc *BlockChain) AddBlock(block Block) {
-	bc.rwMutex.Lock()
-	if len(bc.blocks) == 0 {
-		bc.blocks = append(bc.blocks, block)
-		bc.CurrentHeight++
-		bc.rwMutex.Unlock()
+// blockMined is called when a block is mined
+// it adds the block, and publishes it to the network
+func (bc *BlockChain) blockMined(block Block) {
+	bc.addBlock(block)
+	// publish block to network
+}
+
+func (bc *BlockChain) AddLatestBlock(block Block) {
+	// check if block already exists in our stack
+	// if it does we skip
+	if int(bc.CurrentHeight()) >= int(block.Height) {
 		return
 	}
 
-	if block.ValidateBlock(bc.CurrentHeight, bc.blocks[bc.CurrentHeight-1].Hash) && bc.validateOperations(block) {
-		bc.blocks = append(bc.blocks, block)
-		bc.CurrentHeight++
-		bc.rwMutex.Unlock()
-		bc.processBlockLedgerAndOperations(block)
-	} else {
-		fmt.Println("invalid block")
-		bc.rwMutex.Unlock()
-	}
+	bc.addBlock(block)
+	// log error
+	// if err == nil we have added the block to our blockchain
+	// after that we stop our current mining operations and start mining the new block
+	// check if the operations in this block are still left in the mempool, if so remove them
+
+	// publish block to network
 }
 
-func (bc *BlockChain) validateOperations(block Block) bool {
+// addBlock adds and proceses the block to the blockchain memory array
+func (bc *BlockChain) addBlock(block Block) error {
+	if bc.CurrentHeight() == 0 {
+		bc.rwMutex.Lock()
+		bc.blocks = append(bc.blocks, block)
+		bc.rwMutex.Unlock()
+		return nil
+	}
+
+	if !block.ValidateBlock(bc.CurrentHeight(), bc.blocks[bc.CurrentHeight()-1].Hash) {
+		return ErrInvalidBlock
+	}
+
+	ok, err := bc.validateAndApplyOperations(block)
+	if err != nil || !ok {
+		return ErrInvalidBlock
+	}
+
+	bc.rwMutex.Lock()
+	bc.blocks = append(bc.blocks, block)
+	bc.rwMutex.Unlock()
+
+	bc.addBlockCleanup()
+
+	return nil
+}
+
+func (bc *BlockChain) validateAndApplyOperations(block Block) (bool, error) {
+	l := bc.ledger.copy()
+
 	// validate transactions
 	for _, op := range block.Operations {
-		if v, _ := ValidateOperation(op, op.OpFrom, bc.ledger.GetAccount(op.OpFrom)); !v {
-			return false
+		if v, _ := ValidateOperation(op, op.OpFrom, l.GetAccount(op.OpFrom)); !v {
+			return false, ErrInvalidOperation
+		}
+		err := l.ApplyOperation(op)
+		if err != nil {
+			return false, err
 		}
 	}
-	return true
-}
-
-func (bc *BlockChain) processBlockLedgerAndOperations(block Block) {
-	bc.rwMutex.Lock()
-	defer bc.rwMutex.Unlock()
-	// process ledger
-	for _, op := range block.Operations {
-		bc.ledger.ApplyOperation(op)
-	}
-
 	// give reward
 	reward := uint64(MinedCoinsPerNoOpBlock)
 	if len(block.Operations) > 0 {
 		reward = uint64(MinedCoinsPerOpBlock)
 	}
 
-	if bc.ledger.Ledger[block.Creator] == nil {
-		bc.ledger.Ledger[block.Creator] = &AccountStorage{
-			Balance: reward,
-			Nonce:   0,
-		}
-	} else {
-		bc.ledger.Ledger[block.Creator].Balance += reward
-	}
-	fmt.Printf("processed Block: %v, rewarded: %v, balance: %v \n", block, block.Creator, bc.ledger.Ledger[block.Creator].Balance)
-	// process operations
+	l.GetAccount(block.Creator).AddBalance(reward)
+
+	fmt.Printf("processed Block: %v, rewarded: %v, balance: %v \n", block, block.Creator, l.GetAccount(block.Creator).GetBalance())
+
+	// replace the ledger
+	bc.rwMutex.Lock()
+	bc.ledger = l
+	bc.operationMemPool.SetLedger(l.copy())
+	// replace rfs
+	bc.rwMutex.Unlock()
+
+	return true, nil
 }
 
 // WARNING! THIS IS EXTERNAL ONLY FUNCTION, IT IS NOT AN INTERNAL FUNCTION
 func (bc *BlockChain) AddOperation(op OperationMsg) error {
+	if bc.operationMemPool.Exists(op) {
+		return ErrAlreadyInMempool
+	}
+
+	// publish operation to network
+
 	// validate operation
 	var err error
-	var v bool
-	if v, err = ValidateOperation(op, op.OpFrom, bc.ledger.GetAccount(op.OpFrom)); v {
-		bc.rwMutex.Lock()
-		bc.operationMemPool = append(bc.operationMemPool, op)
-		bc.rwMutex.Unlock()
 
-		if bc.readState() == WAITING_FOR_OPERATION {
-			return nil
-		}
-		bc.startOpMiningTimer()
-	} else {
+	// try to add to mempool
+	err = bc.operationMemPool.AddOperation(op)
+
+	if err != nil {
 		return err
 	}
+
+	if bc.readState() == WAITING_FOR_OPERATION {
+		return nil
+	}
+
+	bc.startOpMiningTimer()
+
 	return nil
 }
 
+// for clients that connect to this node, we sign transactions via this node's account
 func (bc *BlockChain) SignTransaction(op OperationMsg) (OperationMsg, error) {
 	op.OpFrom = Address(bc.Wallet.Address)
 	hash, sig, err := bc.Wallet.Sign(op.Op)
@@ -280,6 +288,12 @@ func (bc *BlockChain) SignTransaction(op OperationMsg) (OperationMsg, error) {
 		Sig:  sig,
 	}
 	return op, nil
+}
+
+func (bc *BlockChain) CurrentHeight() uint64 {
+	bc.rwMutex.RLock()
+	defer bc.rwMutex.RUnlock()
+	return uint64(len(bc.blocks))
 }
 
 // TODO: USE ATOMIC
@@ -298,19 +312,30 @@ func (bc *BlockChain) startOpMiningTimer() {
 		return
 	}
 
+	// lock the start op mining timer
 	bc.miningState.startOpMiningTimerRunning.Store(1)
+
 	go func() {
 		bc.miningState.timeStartChan <- struct{}{}
 		fmt.Println("starting timer")
+
 		if bc.readState() == NO_OPERATION_MINING {
-			bc.miningState.abandonMining <- struct{}{}
+			bc.abandonMining()
 		}
+
 		// wait for state to change
 		bc.waitTillStateChange(WAITING_FOR_OPERATION)
+
 		bc.miningState.startOpMiningTimerRunning.Store(0)
+
 		<-time.After(GenOpBlockTimeout)
+
 		bc.miningState.timeOutChan <- struct{}{}
 	}()
+}
+
+func (bc *BlockChain) abandonMining() {
+	bc.miningState.abandonMining <- struct{}{}
 }
 
 func (bc *BlockChain) waitTillStateChange(state MINING_STATE) {
@@ -320,4 +345,9 @@ func (bc *BlockChain) waitTillStateChange(state MINING_STATE) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func (bc *BlockChain) addBlockCleanup() {
+	// correct our nonce
+	// bc.Wallet.SetNonce(bc.ledger.GetAccount(Address(bc.Wallet.Address)).GetNonce())
 }

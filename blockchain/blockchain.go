@@ -26,17 +26,19 @@ func (s MINING_STATE) String() string {
 type BlockChain struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
-	Running *int32 `json:"running"`
+	Running *int32
 
-	Wallet *crypto.Account `json:"wallet"`
+	Wallet *crypto.Account
 
-	rwMutex sync.RWMutex `json:"rw_mutex"`
+	rwMutex sync.RWMutex
 
-	blocks []Block `json:"blocks"`
+	blocks []Block
 
-	fileStore        *RFSStore         `json:"file_store"`
-	ledger           *LedgerStore      `json:"ledger"`
-	operationMemPool *OperationMemPool `json:"operation_mem_pool"`
+	fileStore        *RFSStore
+	ledger           *LedgerStore
+	operationMemPool *OperationMemPool
+
+	network Network
 
 	miningState struct {
 		state                     *int32
@@ -44,14 +46,15 @@ type BlockChain struct {
 		timeOutChan               chan struct{}
 		abandonMining             chan struct{}
 		startOpMiningTimerRunning *atomic.Int32
+		miningPaused              *int32
 	}
 
 	// chans
-	blockListener     <-chan Block
-	operationListener <-chan OperationMsg
+	blockListener     chan Block
+	operationListener chan OperationMsg
 
-	blockPublisher     chan<- Block
-	operationPublisher chan<- OperationMsg
+	blockPublisher     chan Block
+	operationPublisher chan OperationMsg
 }
 
 func NewBlockchain() *BlockChain {
@@ -61,6 +64,7 @@ func NewBlockchain() *BlockChain {
 	startOpMiningTimerRunning.Store(0)
 	miningState := int32(IDLE)
 	running := int32(0)
+	miningPaused := int32(0)
 
 	ledger := NewLedgerStore()
 
@@ -80,12 +84,14 @@ func NewBlockchain() *BlockChain {
 			timeOutChan               chan struct{}
 			abandonMining             chan struct{}
 			startOpMiningTimerRunning *atomic.Int32
+			miningPaused              *int32
 		}{
 			state:                     &miningState,
 			timeStartChan:             make(chan struct{}, 256),
 			timeOutChan:               make(chan struct{}, 256),
 			abandonMining:             make(chan struct{}, 256),
 			startOpMiningTimerRunning: &startOpMiningTimerRunning,
+			miningPaused:              &miningPaused,
 		},
 
 		blockListener:      make(chan Block, 256),
@@ -93,6 +99,10 @@ func NewBlockchain() *BlockChain {
 		blockPublisher:     make(chan Block, 256),
 		operationPublisher: make(chan OperationMsg, 256),
 	}
+}
+
+func (bc *BlockChain) SetNetwork(network Network) {
+	bc.network = network
 }
 
 // run blockchain
@@ -115,6 +125,8 @@ func (bc *BlockChain) Run() {
 	// if we get a new block and its valid, we will add it to our blockchain and abandon our current blockmining
 	// if we get a new txn, we will add it to our mempool and start mining a new block
 
+	// TODO: if peers are not empty
+	bc.syncBlockChain()
 	// TODO: if len nodes to connect to is 0 we generate genesis block
 	if len(bc.blocks) == 0 {
 		genesis := GenerateGenesisBlock()
@@ -122,6 +134,9 @@ func (bc *BlockChain) Run() {
 	}
 
 	go bc.minerWorker()
+	go bc.blockPubSubWorker()
+	go bc.operationPubSubWorker()
+
 	atomic.StoreInt32(bc.Running, 1)
 }
 
@@ -173,17 +188,49 @@ func (bc *BlockChain) blockMined(block Block) {
 func (bc *BlockChain) AddLatestBlock(block Block) {
 	// check if block already exists in our stack
 	// if it does we skip
-	if int(bc.CurrentHeight()) >= int(block.Height) {
+	currentHeight := bc.CurrentHeight()
+
+	if currentHeight >= block.Height {
 		return
 	}
 
-	bc.addBlock(block)
+	if currentHeight+1 != block.Height {
+		// we are out of sync
+		// lets fetch all the blocks before this block
+
+		// step 1: pause mining
+		bc.abandonMining()
+		bc.pauseMining()
+
+		// step 2: get all the blocks before this block
+		bc.syncBlockChain()
+		// , gets blocks one by one from the best height peer
+		// also gets the operation mempool and syncs it...
+		// is a blocking function
+		// resume mining after sync is complete
+		bc.resumeMining()
+		return
+	}
+
 	// log error
 	// if err == nil we have added the block to our blockchain
 	// after that we stop our current mining operations and start mining the new block
+	if bc.readState() == OPERATION_MINING || bc.readState() == NO_OPERATION_MINING {
+		bc.abandonMining()
+	}
 	// check if the operations in this block are still left in the mempool, if so remove them
 
 	// publish block to network
+}
+
+func (bc *BlockChain) GetBlockPubSubChans() (chan<- Block, <-chan Block) {
+	// others will send to our listener, and will listen to our publisher
+	return bc.blockListener, bc.blockPublisher
+}
+
+func (bc *BlockChain) GetOperationPubSubChans() (chan<- OperationMsg, <-chan OperationMsg) {
+	// others will send to our listener, and will listen to our publisher
+	return bc.operationListener, bc.operationPublisher
 }
 
 // addBlock adds and proceses the block to the blockchain memory array
@@ -273,6 +320,12 @@ func (bc *BlockChain) AddOperation(op OperationMsg) error {
 	return nil
 }
 
+func (bc *BlockChain) syncBlockChain() {
+	// gets best height node
+	// gets all blocks till we're in sync
+	// gets all transactions from the pool of the best node
+}
+
 // for clients that connect to this node, we sign transactions via this node's account
 func (bc *BlockChain) SignTransaction(op OperationMsg) (OperationMsg, error) {
 	op.OpFrom = Address(bc.Wallet.Address)
@@ -305,6 +358,18 @@ func (bc *BlockChain) setState(state MINING_STATE) {
 func (bc *BlockChain) readState() MINING_STATE {
 	state := atomic.LoadInt32(bc.miningState.state)
 	return MINING_STATE(state)
+}
+
+func (bc *BlockChain) pauseMining() {
+	atomic.StoreInt32(bc.miningState.miningPaused, 1)
+}
+
+func (bc *BlockChain) resumeMining() {
+	atomic.StoreInt32(bc.miningState.miningPaused, 0)
+}
+
+func (bc *BlockChain) isMiningPaused() bool {
+	return atomic.LoadInt32(bc.miningState.miningPaused) == 1
 }
 
 func (bc *BlockChain) startOpMiningTimer() {

@@ -6,23 +6,37 @@ import (
 	"sync"
 )
 
-func (bc *BlockChain) blockListenerWorker() {
+func (bc *BlockChain) blockPubSubWorker() {
 	for {
 		select {
 		case <-bc.ctx.Done():
 			return
 		case block := <-bc.blockListener:
+			if bc.CurrentHeight() >= block.Height {
+				continue
+			}
+			if bc.isMiningPaused() {
+				continue
+			}
+			bc.blockPublisher <- block
 			bc.AddLatestBlock(block)
 		}
 	}
 }
 
-func (bc *BlockChain) operationListenerWorker() {
+func (bc *BlockChain) operationPubSubWorker() {
 	for {
 		select {
 		case <-bc.ctx.Done():
 			return
 		case op := <-bc.operationListener:
+			if bc.operationMemPool.Exists(op) {
+				continue
+			}
+			if bc.isMiningPaused() {
+				continue
+			}
+			bc.operationPublisher <- op
 			bc.AddOperation(op)
 		}
 	}
@@ -51,6 +65,10 @@ func (bc *BlockChain) minerWorker() {
 
 	for {
 		fmt.Printf("Blockchain Current Height: %v \n", bc.CurrentHeight())
+		if bc.isMiningPaused() {
+			continue
+		}
+
 		select {
 		case <-bc.ctx.Done():
 			return

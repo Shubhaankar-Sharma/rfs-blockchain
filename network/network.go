@@ -125,54 +125,161 @@ func (n *Network) handleRequest(conn net.Conn) {
 		log.Panic(err)
 	}
 
-	go n.reqHandler(req)
-}
-
-func (n *Network) reqHandler(req []byte) {
 	msg, err := DecodeMsg(req)
 	if err != nil {
 		log.Println("error decoding request:", err)
 		return
 	}
-	if msg.Op == UNKOWN {
-		log.Println("unknown request")
-		return
+
+	// check if request is valid
+	{
+		if msg.Op == UNKOWN {
+			log.Println("unknown request")
+			return
+		}
+		if msg.ReqID == "" {
+			log.Println("request missing reqID")
+			return
+		}
+		if msg.AddrFrom == "" {
+			log.Println("request missing addrFrom")
+			return
+		}
+
+		if msg.AddrFrom == n.addr {
+			log.Println("request from self")
+			return
+		}
+
+		n.mu.RLock()
+		_, ok := n.reqIDsListened[msg.ReqID]
+		n.mu.RUnlock()
+		if ok {
+			log.Println("request already listened to")
+			return
+		}
+
+		n.mu.Lock()
+		if _, ok := n.peers[Addr(msg.AddrFrom)]; !ok {
+			n.peers[Addr(msg.AddrFrom)] = struct{}{}
+		}
+		n.reqIDsListened[msg.ReqID] = struct{}{}
+		n.mu.Unlock()
 	}
-	if msg.ReqID == "" {
-		log.Println("request missing reqID")
-		return
-	}
-	if msg.AddrFrom == "" {
-		log.Println("request missing addrFrom")
+
+	if IsLazyOperation(msg.Op) {
+		go n.lazyReqHandler(msg)
 		return
 	}
 
-	if msg.AddrFrom == n.addr {
-		log.Println("request from self")
+	reply, err := n.instantReqHandler(msg)
+	if err != nil {
+		log.Println("error handling request:", err)
 		return
 	}
-
-	n.mu.RLock()
-	_, ok := n.reqIDsListened[msg.ReqID]
-	n.mu.RUnlock()
-	if ok {
-		log.Println("request already listened to")
+	data, err := reply.ToBytes()
+	if err != nil {
+		log.Println("error encoding reply:", err)
 		return
 	}
-
-	n.mu.Lock()
-	if _, ok := n.peers[Addr(msg.AddrFrom)]; !ok {
-		n.peers[Addr(msg.AddrFrom)] = struct{}{}
+	_, err = io.Copy(conn, bytes.NewReader(data))
+	if err != nil {
+		log.Println("error sending reply:", err)
+		return
 	}
-	n.reqIDsListened[msg.ReqID] = struct{}{}
-	n.mu.Unlock()
+}
 
+func (n *Network) instantReqHandler(msg Msg) (Msg, error) {
+	switch msg.Op {
+	case GET_FULL_BLOCKCHAIN:
+		return n.handleFullBlockchainRequest(msg)
+	case GET_MEM_POOL:
+		return n.handleGetMemPoolRequest(msg)
+	case GET_PEERS:
+		peers := []string{}
+		for peer := range n.peers {
+			if peer == Addr(msg.AddrFrom) {
+				continue
+			}
+			peers = append(peers, string(peer))
+		}
+		return NewMsg(SEND_PEERS, PeersResponse{Peers: peers}, n.addr, msg.ReqID)
+	default:
+		// anything else should be handled directly while making a request
+		// there's no reason why the request handler is getting instant responses to handle
+		// and other lazy responses should be handled by the lazy request handler
+		return Msg{}, errors.New("invalid request")
+	}
+}
+
+// func (n *Network) handleGetBlockRequest(msg Msg) (Msg, error) {
+// 	if msg.Op != GET_BLOCK {
+// 		return Msg{}, errors.New("invalid request")
+// 	}
+// 	request := BlockRequest{}
+// 	err := json.Unmarshal(msg.Data, &request)
+// 	if err != nil {
+// 		return Msg{}, err
+// 	}
+
+// 	block, err := n.blockchain.GetBlock(request.Number)
+// 	if err != nil {
+// 		return Msg{}, err
+// 	}
+
+// 	body := BlockResponse{
+// 		Block: block,
+// 	}
+
+// 	return NewMsg(SEND_BLOCK, body, n.addr, msg.ReqID)
+// }
+
+func (n *Network) SyncBlockchain() ([]blockchain.Block, map[string]blockchain.OperationMsg, error) {
+	// get best height
+	_, addr := n.GetBestHeight()
+	if addr == "" {
+		return nil, nil, errors.New("no peers")
+	}
+	blocks, err := n.getFullBlockchain(addr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// get mempool
+	mempool, err := n.getMemPool(addr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return blocks, mempool, nil
+}
+
+func (n *Network) handleGetMemPoolRequest(msg Msg) (Msg, error) {
+	if msg.Op != GET_MEM_POOL {
+		return Msg{}, errors.New("invalid request")
+	}
+	body := MemPoolResponse{
+		MemPool: n.blockchain.GetMemPool(),
+	}
+
+	return NewMsg(SEND_MEM_POOL, body, n.addr, msg.ReqID)
+}
+
+func (n *Network) handleFullBlockchainRequest(msg Msg) (Msg, error) {
+	if msg.Op != GET_FULL_BLOCKCHAIN {
+		return Msg{}, errors.New("invalid request")
+	}
+	body := FullBlockchainResponse{
+		Chain: n.blockchain.GetFullBlockchain(),
+	}
+	return NewMsg(SEND_FULL_BLOCKCHAIN, body, n.addr, msg.ReqID)
+}
+
+func (n *Network) lazyReqHandler(msg Msg) {
 	var isResponse bool
 	if msg.ResponseID != "" {
 		isResponse = true
 	}
-
-	// fmt.Println("request:", msg)
 
 	if isResponse {
 		n.mu.RLock()
@@ -192,19 +299,52 @@ func (n *Network) reqHandler(req []byte) {
 		// ignore these requests cause they should ideally be responses
 		return
 	case SEND_PEERS:
-
+		// not being used right now
 	case SEND_BLOCK:
-
+		// not being used right now
 	case SEND_OPERATION:
-
-	case GET_FULL_BLOCKCHAIN:
+		go n.handleSendOperationRequest(&msg)
 	case GET_BLOCK:
+		// not being used right now
+	case GET_FULL_BLOCKCHAIN, GET_PEERS, GET_MEM_POOL:
+		// ignore these requests cause they should ideally be handled by the instant response handler
+		return
 	case GET_BEST_HEIGHT:
-		n.handleGetBestHeightRequest(&msg)
+		go n.handleGetBestHeightRequest(&msg)
 		// do it rn
+	case BLOCK_MINED:
+		go n.handleBlockMinedRequest(&msg)
 	}
 	// broadcast msg
 	n.broadcastMsg(&msg)
+}
+
+func (n *Network) handleSendOperationRequest(msg *Msg) {
+	if msg.Op != SEND_OPERATION {
+		return
+	}
+
+	var body OperationResponse
+	err := json.Unmarshal(msg.Data, &body)
+	if err != nil {
+		log.Println("error unmarshalling send operation request:", err)
+		return
+	}
+	n.registerOperationChan <- body.Op
+}
+
+func (n *Network) handleBlockMinedRequest(msg *Msg) {
+	if msg.Op != BLOCK_MINED {
+		return
+	}
+
+	var body BlockResponse
+	err := json.Unmarshal(msg.Data, &body)
+	if err != nil {
+		log.Println("error unmarshalling block mined request:", err)
+		return
+	}
+	n.registerBlockChan <- body.Block
 }
 
 func (n *Network) broadcastMsg(msg *Msg) {
@@ -217,6 +357,86 @@ func (n *Network) broadcastMsg(msg *Msg) {
 
 		n.sendMsg(string(peer), msg)
 	}
+}
+
+func (n *Network) makeSynchronousRequest(addr string, msg *Msg) (Msg, error) {
+	data, err := msg.ToBytes()
+	if err != nil {
+		return Msg{}, err
+	}
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return Msg{}, err
+	}
+	defer conn.Close()
+
+	_, err = io.Copy(conn, bytes.NewReader(data))
+	if err != nil {
+		return Msg{}, err
+	}
+
+	// read response
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	data, err = io.ReadAll(conn)
+	if err != nil {
+		return Msg{}, err
+	}
+
+	resp, err := DecodeMsg(data)
+	if err != nil {
+		return Msg{}, err
+	}
+
+	return resp, nil
+}
+
+func (n *Network) getFullBlockchain(addr string) ([]blockchain.Block, error) {
+	msg, err := NewMsg(GET_FULL_BLOCKCHAIN, nil, n.addr, "")
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := n.makeSynchronousRequest(addr, &msg)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Op != SEND_FULL_BLOCKCHAIN {
+		return nil, errors.New("invalid response")
+	}
+
+	body := FullBlockchainResponse{}
+	err = json.Unmarshal(resp.Data, &body)
+	if err != nil {
+		return nil, err
+	}
+
+	return body.Chain, nil
+}
+
+func (n *Network) getMemPool(addr string) (map[string]blockchain.OperationMsg, error) {
+	msg, err := NewMsg(GET_MEM_POOL, nil, n.addr, "")
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := n.makeSynchronousRequest(addr, &msg)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Op != SEND_MEM_POOL {
+		return nil, errors.New("invalid response")
+	}
+
+	body := MemPoolResponse{}
+	err = json.Unmarshal(resp.Data, &body)
+	if err != nil {
+		return nil, err
+	}
+
+	return body.MemPool, nil
 }
 
 func (n *Network) handleGetBestHeightRequest(msg *Msg) {

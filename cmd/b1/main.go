@@ -21,7 +21,8 @@ func main() {
 		}
 	}()
 	go b.Run()
-	for ; ; _ = <-time.NewTicker(time.Second * 2).C {
+	ticker := time.NewTicker(time.Second * 2)
+	for ; ; <-ticker.C {
 		bestHeight, addy := n.GetBestHeight()
 		fmt.Printf("Best Height From Peers: %d %s \n", bestHeight, addy)
 	}

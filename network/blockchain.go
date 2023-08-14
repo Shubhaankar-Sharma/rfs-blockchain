@@ -11,4 +11,7 @@ type IBlockchain interface {
 	// GetBlockByNumber(uint64) (blockchain.Block, error)
 	// GetOperationPool() map[string]blockchain.OperationMsg
 	// GetBlocksByIndex(uint64, uint64) ([]blockchain.Block, error)
+	GetFullBlockchain() []blockchain.Block
+	GetMemPool() map[string]blockchain.OperationMsg
+	GetBlock(uint64) (blockchain.Block, error)
 }

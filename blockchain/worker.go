@@ -4,10 +4,17 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 func (bc *BlockChain) blockPubSubWorker() {
 	for {
+		if bc.isMiningPaused() {
+			waitUntil(func() bool {
+				return !bc.isMiningPaused()
+			})
+		}
+
 		select {
 		case <-bc.ctx.Done():
 			return
@@ -15,10 +22,6 @@ func (bc *BlockChain) blockPubSubWorker() {
 			if bc.CurrentHeight() >= block.Height {
 				continue
 			}
-			if bc.isMiningPaused() {
-				continue
-			}
-			bc.blockPublisher <- block
 			bc.AddLatestBlock(block)
 		}
 	}
@@ -26,6 +29,11 @@ func (bc *BlockChain) blockPubSubWorker() {
 
 func (bc *BlockChain) operationPubSubWorker() {
 	for {
+		if bc.isMiningPaused() {
+			waitUntil(func() bool {
+				return !bc.isMiningPaused()
+			})
+		}
 		select {
 		case <-bc.ctx.Done():
 			return
@@ -33,11 +41,18 @@ func (bc *BlockChain) operationPubSubWorker() {
 			if bc.operationMemPool.Exists(op) {
 				continue
 			}
-			if bc.isMiningPaused() {
-				continue
-			}
 			bc.operationPublisher <- op
 			bc.AddOperation(op)
+		}
+	}
+}
+
+func waitUntil(status func() bool) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for ; ; <-ticker.C {
+		if status() {
+			return
 		}
 	}
 }
@@ -66,7 +81,9 @@ func (bc *BlockChain) minerWorker() {
 	for {
 		fmt.Printf("Blockchain Current Height: %v \n", bc.CurrentHeight())
 		if bc.isMiningPaused() {
-			continue
+			waitUntil(func() bool {
+				return !bc.isMiningPaused()
+			})
 		}
 
 		select {

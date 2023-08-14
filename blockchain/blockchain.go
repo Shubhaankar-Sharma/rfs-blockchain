@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -415,4 +416,23 @@ func (bc *BlockChain) waitTillStateChange(state MINING_STATE) {
 func (bc *BlockChain) addBlockCleanup() {
 	// correct our nonce
 	// bc.Wallet.SetNonce(bc.ledger.GetAccount(Address(bc.Wallet.Address)).GetNonce())
+}
+
+func (bc *BlockChain) GetBlock(height uint64) (Block, error) {
+	if height >= bc.CurrentHeight() {
+		return Block{}, errors.New("block height out of range")
+	}
+	return bc.blocks[height-1], nil
+}
+
+func (bc *BlockChain) GetFullBlockchain() []Block {
+	bc.rwMutex.RLock()
+	defer bc.rwMutex.RUnlock()
+	return bc.blocks
+}
+
+func (bc *BlockChain) GetMemPool() map[string]OperationMsg {
+	bc.rwMutex.RLock()
+	defer bc.rwMutex.RUnlock()
+	return bc.operationMemPool.operationMemPool
 }

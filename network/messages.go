@@ -35,8 +35,7 @@ type OperationResponse struct {
 }
 
 type MemPoolResponse struct {
-	MemPool    map[string]blockchain.OperationMsg `json:"mempool"`
-	LedgerCopy blockchain.LedgerStore             `json:"ledger_copy"`
+	MemPool map[string]blockchain.OperationMsg `json:"mempool"`
 }
 
 type HeightResponse struct {

@@ -53,9 +53,6 @@ type BlockChain struct {
 	// chans
 	blockListener     chan Block
 	operationListener chan OperationMsg
-
-	blockPublisher     chan Block
-	operationPublisher chan OperationMsg
 }
 
 func NewBlockchain() *BlockChain {
@@ -95,10 +92,8 @@ func NewBlockchain() *BlockChain {
 			miningPaused:              &miningPaused,
 		},
 
-		blockListener:      make(chan Block, 256),
-		operationListener:  make(chan OperationMsg, 256),
-		blockPublisher:     make(chan Block, 256),
-		operationPublisher: make(chan OperationMsg, 256),
+		blockListener:     make(chan Block, 256),
+		operationListener: make(chan OperationMsg, 256),
 	}
 }
 
@@ -224,14 +219,14 @@ func (bc *BlockChain) AddLatestBlock(block Block) {
 	// publish block to network
 }
 
-func (bc *BlockChain) GetBlockPubSubChans() (chan<- Block, <-chan Block) {
+func (bc *BlockChain) GetBlockPubSubChans() chan<- Block {
 	// others will send to our listener, and will listen to our publisher
-	return bc.blockListener, bc.blockPublisher
+	return bc.blockListener
 }
 
-func (bc *BlockChain) GetOperationPubSubChans() (chan<- OperationMsg, <-chan OperationMsg) {
+func (bc *BlockChain) GetOperationPubSubChans() chan<- OperationMsg {
 	// others will send to our listener, and will listen to our publisher
-	return bc.operationListener, bc.operationPublisher
+	return bc.operationListener
 }
 
 // addBlock adds and proceses the block to the blockchain memory array
@@ -294,13 +289,22 @@ func (bc *BlockChain) validateAndApplyOperations(block Block) (bool, error) {
 	return true, nil
 }
 
-// WARNING! THIS IS EXTERNAL ONLY FUNCTION, IT IS NOT AN INTERNAL FUNCTION
 func (bc *BlockChain) AddOperation(op OperationMsg) error {
+	err := bc.addOperation(op)
+	if err != nil {
+		return err
+	}
+
+	// return nil
+	bc.network.PublishOperation(op)
+	return nil
+}
+
+// WARNING! THIS IS EXTERNAL ONLY FUNCTION, IT IS NOT AN INTERNAL FUNCTION
+func (bc *BlockChain) addOperation(op OperationMsg) error {
 	if bc.operationMemPool.Exists(op) {
 		return ErrAlreadyInMempool
 	}
-
-	// publish operation to network
 
 	// validate operation
 	var err error
@@ -348,6 +352,30 @@ func (bc *BlockChain) CurrentHeight() uint64 {
 	bc.rwMutex.RLock()
 	defer bc.rwMutex.RUnlock()
 	return uint64(len(bc.blocks))
+}
+
+func (bc *BlockChain) GetOurBalance() uint64 {
+	bc.rwMutex.RLock()
+	defer bc.rwMutex.RUnlock()
+	return bc.ledger.GetAccount(Address(bc.Wallet.Address)).GetBalance()
+}
+
+func (bc *BlockChain) PrintBalances() {
+	bc.rwMutex.RLock()
+	defer bc.rwMutex.RUnlock()
+	for address, account := range bc.ledger.Ledger {
+		fmt.Printf("Account: %s, Balance: %d \n", address, account.GetBalance())
+	}
+}
+
+func (bc *BlockChain) PrintBlocksMinedByOthers() {
+	bc.rwMutex.RLock()
+	defer bc.rwMutex.RUnlock()
+	for _, block := range bc.blocks {
+		if block.Creator != Address(bc.Wallet.Address) {
+			fmt.Printf("Block: %v, Creator: %s \n", block, block.Creator)
+		}
+	}
 }
 
 // TODO: USE ATOMIC

@@ -41,8 +41,7 @@ func (bc *BlockChain) operationPubSubWorker() {
 			if bc.operationMemPool.Exists(op) {
 				continue
 			}
-			bc.operationPublisher <- op
-			bc.AddOperation(op)
+			bc.addOperation(op)
 		}
 	}
 }

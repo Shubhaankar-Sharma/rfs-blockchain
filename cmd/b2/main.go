@@ -24,7 +24,10 @@ func main() {
 	ticker := time.NewTicker(time.Second * 2)
 	for ; ; <-ticker.C {
 		bestHeight, addy := n.GetBestHeight()
-		fmt.Printf("Best Height From Peers: %d %s \n", bestHeight, addy)
+		fmt.Printf("-------------Best Height From Peers-----------------: %d %s \n", bestHeight, addy)
+		fmt.Printf("-------------Our Balance-----------------: %d \n", b.GetOurBalance())
+		b.PrintBalances()
+		b.PrintBlocksMinedByOthers()
 	}
 	// fmt.Println(n.GetBestHeight())
 }

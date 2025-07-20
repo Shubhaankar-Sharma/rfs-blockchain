@@ -29,10 +29,8 @@ type Network struct {
 
 	reqIDsListened map[string]struct{}
 
-	registerBlockChan       chan<- blockchain.Block
-	distributeBlockChan     <-chan blockchain.Block
-	registerOperationChan   chan<- blockchain.OperationMsg
-	distributeOperationChan <-chan blockchain.OperationMsg
+	registerBlockChan     chan<- blockchain.Block
+	registerOperationChan chan<- blockchain.OperationMsg
 
 	reqIDs map[string]chan Msg
 }
@@ -62,8 +60,8 @@ func (n *Network) RegisterChannels() {
 		panic("blockchain cannot be nil")
 	}
 
-	n.registerBlockChan, n.distributeBlockChan = n.blockchain.GetBlockPubSubChans()
-	n.registerOperationChan, n.distributeOperationChan = n.blockchain.GetOperationPubSubChans()
+	n.registerBlockChan = n.blockchain.GetBlockPubSubChans()
+	n.registerOperationChan = n.blockchain.GetOperationPubSubChans()
 }
 
 func (n *Network) Run() error {
@@ -75,7 +73,7 @@ func (n *Network) Run() error {
 		return errors.New("blockchain cannot be nil")
 	}
 
-	if n.registerBlockChan == nil || n.distributeBlockChan == nil || n.registerOperationChan == nil || n.distributeOperationChan == nil {
+	if n.registerBlockChan == nil || n.registerOperationChan == nil {
 		return errors.New("blockchain not registered")
 	}
 
@@ -475,7 +473,19 @@ func (n *Network) sendMsg(addr string, msg *Msg) error {
 	if err != nil {
 		return err
 	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.reqIDsListened[msg.ReqID] = struct{}{}
 	return nil
+}
+
+func (n *Network) PublishOperation(op blockchain.OperationMsg) {
+	msg, err := NewMsg(SEND_OPERATION, OperationResponse{Op: op}, n.addr)
+	if err != nil {
+		log.Println("error creating operation message:", err)
+		return
+	}
+	n.broadcastMsg(&msg)
 }
 
 func (n *Network) makeRequestWithResponse(addr string, msg Msg, waitFor time.Duration, foundResponses func([]Msg) (Msg, bool)) (*Msg, error) {

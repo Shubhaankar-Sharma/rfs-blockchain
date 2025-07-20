@@ -6,8 +6,8 @@ import "github.com/Shubhaankar-Sharma/rfs-blockchain/blockchain"
 
 type IBlockchain interface {
 	CurrentHeight() uint64
-	GetBlockPubSubChans() (chan<- blockchain.Block, <-chan blockchain.Block)
-	GetOperationPubSubChans() (chan<- blockchain.OperationMsg, <-chan blockchain.OperationMsg)
+	GetBlockPubSubChans() chan<- blockchain.Block
+	GetOperationPubSubChans() chan<- blockchain.OperationMsg
 	// GetBlockByNumber(uint64) (blockchain.Block, error)
 	// GetOperationPool() map[string]blockchain.OperationMsg
 	// GetBlocksByIndex(uint64, uint64) ([]blockchain.Block, error)
